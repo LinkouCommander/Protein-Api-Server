@@ -12,7 +12,9 @@ const {
     predictSecondaryStructure, 
     generateStructureSVG, 
     authenticateUser,
-    createProteinWithFragments, 
+    createProteinWithFragments,
+    getUpdatedFragmentData,
+    getMotifs
 } = require('./lib');
 
 const app = express();
@@ -81,7 +83,7 @@ app.get('/api/proteins', async (req, res) => {
         let sqlQuery = `
             SELECT * 
             FROM proteins
-            ORDER BY created_at DESC
+            ORDER BY created_at ASC
         `
         if(limit === null && offset === null) {
             const proteinList = await pool.query(sqlQuery);
@@ -109,12 +111,29 @@ app.get('/api/proteins', async (req, res) => {
     }
 });
 
+app.get('/api/proteins/:proteinId/fragments', async (req, res, next) => {
+    try {
+        const proteinId = req.params.proteinId;
+
+        const protein = await pool.query("SELECT * FROM proteins WHERE protein_id = $1;", [proteinId]);
+        if(protein.rows.length === 0) throw new NotFoundError("Protein with given ID does not exist" );
+    
+        const fragmentData = await pool.query("SELECT * FROM fragments WHERE protein_id = $1;", [proteinId]);
+    
+        const updatedFragmentData = await getUpdatedFragmentData(pool, fragmentData);
+    
+        res.status(200).json(updatedFragmentData);
+    } catch (error) {
+        next(error);
+    }
+})
+
 // Route to get a protein by ID
 app.get('/api/proteins/:proteinId', async (req, res, next) => {
     try {
         const proteinId = req.params.proteinId;
-        const protein = await pool.query("SELECT * FROM proteins WHERE protein_id = $1;", [proteinId]);
 
+        const protein = await pool.query("SELECT * FROM proteins WHERE protein_id = $1;", [proteinId]);
         if(protein.rows.length === 0) throw new NotFoundError("Protein with given ID does not exist" );
 
         res.status(200).json(protein.rows)
@@ -124,9 +143,10 @@ app.get('/api/proteins/:proteinId', async (req, res, next) => {
 });
 
 // Route to create a new protein
-app.post('/api/proteins/sequence', (req, res, next) => {
+app.post('/api/proteins/sequence', async (req, res, next) => {
     try {
         const sequence = req.body;
+        console.log(sequence);
         if(!sequence || 
             sequence.length > 2000 || 
             sequence.length < 20 || 
@@ -137,38 +157,32 @@ app.post('/api/proteins/sequence', (req, res, next) => {
     
         const proName = generateProteinName(sequence)
     
-        const proteinsList = readProteinsList().proteins;
-        for(const pro of proteinsList) {
-            const protein = readProteins(pro.id);
-            if(protein.data.sequence === sequence) {
-                throw new ConflictError(`Protein with sequence ${sequence} already exists`);
-            }
-        }
-    
-        const proteinId = uuidv4();
+        const sequenceUrl = "abc.com";
+
         // Proceed with creating new protein
-        const protein = {
-            metadata: { 
-                version: "1.0", 
-                createdAt: new Date().toISOString(),
-                updatedAt: new Date().toISOString()
-            },
-            data: {
-                id: proteinId, 
-                name: proName,
-                sequence,
-                molecularWeight: calculateMolecularWeight(sequence),
-                description: "",
-                createdAt: new Date().toISOString(),
-                updatedAt: new Date().toISOString()
-            }
+        const proteinData = {
+            name: proName,
+            description: "",
+            molecularWeight: calculateMolecularWeight(sequence),
+            sequenceLength: sequence.length,
+            sequenceUrl
         };
+
     
-        const filePath = path.join(__dirname, 'data', `${proteinId}.json`);
-        writeProteins(filePath, protein);
-        updateProteinList(proteinId, proName);
+        const { protein_id, isoCreatedDate, isoUpdatedDate } = await createProteinWithFragments(pool, proteinData, sequence);
     
-        res.status(201).json(protein);
+        const proteinOutput = {
+            proteinId: protein_id,
+            name: proName,
+            description: "",
+            molecularWeight: calculateMolecularWeight(sequence),
+            sequenceLength: sequence.length,
+            createdAt: isoCreatedDate,
+            updatedAt: isoUpdatedDate,
+            sequenceUrl
+        }
+
+        res.status(201).json(proteinOutput);
     } catch (error) {
         next(error);
     }
@@ -178,7 +192,7 @@ app.post('/api/proteins/sequence', (req, res, next) => {
 app.post('/api/proteins', async (req, res, next) => {
     try {
         const { sequence, name, description = '' } = req.body;
-        const proName = name ? name : generateProteinName(sequence)
+        const proName = name ? name : generateProteinName(sequence);
     
         if(sequence.length > 2000 || 
             sequence.length < 20 || 
@@ -189,118 +203,130 @@ app.post('/api/proteins', async (req, res, next) => {
             throw new BadRequestError("Invalid input or sequence length exceeded");
         }
 
+        const sequenceUrl = "abc.com";
+
         // Proceed with creating new protein
         const proteinData = {
-            data: {
-                name: proName,
-                description,
-                molecularWeight: calculateMolecularWeight(sequence),
-                sequenceLength: sequence.length,
-                sequenceUrl: "abc.com"
-            }
+            name: proName,
+            description,
+            molecularWeight: calculateMolecularWeight(sequence),
+            sequenceLength: sequence.length,
+            sequenceUrl
         };
 
-        const proteinId = createProteinWithFragments(pool, proteinData, sequence);
+        const { protein_id, isoCreatedDate, isoUpdatedDate } = await createProteinWithFragments(pool, proteinData, sequence);
     
-        const filePath = path.join(__dirname, 'data', `${proteinId}.json`);
-        writeProteins(filePath, protein);
-        updateProteinList(proteinId, proName);
+        const proteinOutput = {
+            proteinId: protein_id,
+            name: proName,
+            description,
+            molecularWeight: calculateMolecularWeight(sequence),
+            sequenceLength: sequence.length,
+            createdAt: isoCreatedDate,
+            updatedAt: isoUpdatedDate,
+            sequenceUrl
+        }
 
-
-    
-        res.status(201).json(protein);
+        res.status(201).json(proteinOutput);
     } catch (error) {
         next(error);
     }
 });
 
 // update protein
-app.put('/api/proteins/:proteinId', (req, res) => {
+app.put('/api/proteins/:proteinId', async (req, res, next) => {
     try {
         const proteinId = req.params.proteinId;
-        let { name, description} = req.body;
+        let { name="", description="" } = req.body;
         
-        const protein = readProteins(proteinId);
-        if(!protein) return res.status(404).json({ error: 'Protein with given ID does not exist' });
+        const protein = await pool.query("SELECT * FROM proteins WHERE protein_id = $1;", [proteinId]);
+        if(protein.rows.length === 0) throw new NotFoundError("Protein with given ID does not exist");
         
-        if (name.trim() === "") name = protein.data.name;
-        if (description.trim() === "") description = protein.data.description;
+        if (name.trim() === "") name = protein.rows[0].name;
+        if (description.trim() === "") description = protein.rows[0].description;
 
-        if(name.length > 100 || description.length > 1000)  res.status(400).json({ error: 'Invalid input data' });
-    
-        let ver = parseInt(protein.metadata.version.split('.')[0]);
-        protein.metadata.version = `${ver + 1}.0`;
-        protein.metadata.updatedAt = new Date().toISOString();
-        protein.data.name = name;
-        protein.data.description = description;
-        protein.data.updatedAt = new Date().toISOString();
-    
-        const filePath = path.join(__dirname, 'data', `${proteinId}.json`);
-        writeProteins(filePath, protein);
-        updateProteinList(proteinId, name);
+        if(name.length > 100 || description.length > 1000)  throw new BadRequestError("Invalid input data");
 
-        res.status(201).json(protein);
+        const proteinUpdate = `
+            UPDATE proteins
+            SET name = $1, description = $2
+            WHERE protein_id = $3
+            RETURNING *;
+        `
+        const proteinResp = await pool.query(proteinUpdate, [name, description, proteinId]);
+
+        res.status(200).json(proteinResp.rows[0]);
     } catch (error) {
         next(error);
     }
 });
 
-// delete protein
-app.delete('/api/proteins/:proteinId', (req, res, next) => {
-    try {
-        const proteinId = req.params.proteinId;
-        let proteins = readProteinsList().proteins;
+// // delete protein
+// app.delete('/api/proteins/:proteinId', (req, res, next) => {
+//     try {
+//         const proteinId = req.params.proteinId;
+//         let proteins = readProteinsList().proteins;
     
-        const idx = proteins.findIndex(p => p.id === proteinId);
-        if (idx === -1) return res.status(404).json({ error: 'Protein with given ID does not exist' });
+//         const idx = proteins.findIndex(p => p.id === proteinId);
+//         if (idx === -1) return res.status(404).json({ error: 'Protein with given ID does not exist' });
     
-        proteins.splice(idx, 1);
-        fs.writeFileSync(DATA_FILE, JSON.stringify({ proteins }, null, 2));
+//         proteins.splice(idx, 1);
+//         fs.writeFileSync(DATA_FILE, JSON.stringify({ proteins }, null, 2));
     
-        const filePath = path.join(__dirname, 'data', `${proteinId}.json`);
-        fs.unlinkSync(filePath);
+//         const filePath = path.join(__dirname, 'data', `${proteinId}.json`);
+//         fs.unlinkSync(filePath);
     
-        res.status(204).send();
-    } catch (error) {
-        next(error);
-    }
-});
+//         res.status(204).send();
+//     } catch (error) {
+//         next(error);
+//     }
+// });
 
-app.get('/api/proteins/:proteinId/structure', (req, res) => {
-    try {
-        const proteinId = req.params.proteinId;
+// // get secondary structure
+// app.get('/api/proteins/:proteinId/structure', async (req, res, next) => {
+//     try {
+//         const proteinId = req.params.proteinId;
 
-        const protein = readProteins(proteinId);
-        if(!protein) return res.status(404).json({ error: 'Protein with given ID does not exist' });
+//         const protein = await pool.query("SELECT * FROM proteins WHERE protein_id = $1;", [proteinId]);
+//         if(!protein) throw new NotFoundError("Protein with given ID does not exist");
 
-        const sequence = protein.data.sequence;
-        const structure = predictSecondaryStructure(protein.data.sequence);
-        if(req.accepts('json')) {
-            const strjs = {
-                proteinId,
-                sequence,
-                secondaryStructure: structure
-            }
-            return res.status(200).json(strjs);
-        }
-        else if(req.accepts('svg')) {
-            const svg = generateStructureSVG(sequence, structure);
-            res.status(200).type('svg').send(svg);
-        }
-        else {
-            res.status(406).json({ error: 'Not Acceptable' });
-        }
+//         const sequence = protein.data.sequence;
+//         const structure = predictSecondaryStructure(protein.data.sequence);
+//         if(req.accepts('json')) {
+//             const strjs = {
+//                 proteinId,
+//                 sequence,
+//                 secondaryStructure: structure
+//             }
+//             return res.status(200).json(strjs);
+//         }
+//         else if(req.accepts('svg')) {
+//             const svg = generateStructureSVG(sequence, structure);
+//             res.status(200).type('svg').send(svg);
+//         }
+//         else {
+//             res.status(406).json({ error: 'Not Acceptable' });
+//         }
 
-    } catch (error) {
-        next(error);
-    }
-}
-)
+//     } catch (error) {
+//         next(error);
+//     }
+// }
+// );
 
 // Error handling middleware
 function errorHandler(err, req, res, next) {
-    console.error(err);
-    res.status(err.code).json({ error: err.message });
+    console.error(err.message);
+
+    if (err instanceof BadRequestError || 
+        err instanceof UnauthorizedError || 
+        err instanceof NotFoundError || 
+        err instanceof ConflictError) {
+        res.status(err.code).json({ error: err.message });
+    }
+    else {
+        res.status(500).json({ error: 'Internal server error' });
+    }
 }
 
 // Add error handling middleware last
