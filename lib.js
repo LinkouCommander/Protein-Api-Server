@@ -176,20 +176,31 @@ async function createProteinWithFragments(pool, proteinData, sequence) {
 
         // Insert protein data
         const proteinResult = await pool.query(
-            `INSERT INTO proteins(name, description, molecular_weight, sequence_length, sequence_url)
-             VALUES($1, $2, $3, $4, $5) RETURNING protein_id, created_at, updated_at`,
+            `INSERT INTO proteins(name, description, molecular_weight, sequence_length)
+             VALUES($1, $2, $3, $4) RETURNING protein_id, created_at, updated_at`,
             [
                 proteinData.name,
                 proteinData.description,
                 proteinData.molecularWeight,
                 proteinData.sequenceLength,
-                proteinData.sequenceUrl
             ]
         );
 
         // console.log(proteinResult);
         const { protein_id, created_at, updated_at } = proteinResult.rows[0];
         
+        const sequenceUrl = `http://localhost:3000/api/proteins/${protein_id}/download`;
+
+        await pool.query(`
+            UPDATE proteins 
+            SET sequence_url = $1
+            WHERE protein_id = $2`,
+            [
+                sequenceUrl,
+                protein_id
+            ]
+        )
+
         // Create and store fragments
         await fragmentAndStoreSequence(pool, protein_id, sequence);
 
@@ -198,7 +209,7 @@ async function createProteinWithFragments(pool, proteinData, sequence) {
 
         // Commit transaction
         await pool.query('COMMIT');
-        return { protein_id, isoCreatedDate, isoUpdatedDate };
+        return { protein_id, isoCreatedDate, isoUpdatedDate, sequenceUrl };
     } catch (error) {
         // Rollback in case of any error
         await pool.query('ROLLBACK');
@@ -229,28 +240,35 @@ async function fragmentAndStoreSequence(pool, proteinId, sequence) {
                 secondary_structure: secondaryStructure,
             };
 
-            const protein_exist = await pool.query(
-                "SELECT * FROM proteins WHERE protein_id = $1",
-                [fragmentData.protein_id]
-            );
-
+            // const protein_exist = await pool.query(
+            //     "SELECT * FROM proteins WHERE protein_id = $1",
+            //     [fragmentData.protein_id]
+            // );
             // console.log(protein_exist.rows);
 
             // 6. Execute database insertion
             const fragmentResult = await pool.query(
-                `INSERT INTO fragments(protein_id, sequence, start_position, end_position, secondary_structure, url)
-                 VALUES($1, $2, $3, $4, $5, $6) RETURNING fragment_id`,
+                `INSERT INTO fragments(protein_id, sequence, start_position, end_position, secondary_structure)
+                 VALUES($1, $2, $3, $4, $5) RETURNING fragment_id`,
                 [
                     fragmentData.protein_id,
                     fragmentData.fragment,
                     i,
                     i + windowSize,
                     fragmentData.secondary_structure,
-                    "fu6ya.com"
                 ]
             );
-            console.log(fragmentData.fragment);
             const fragmentId = fragmentResult.rows[0].fragment_id;
+
+            await pool.query(`
+                UPDATE fragments 
+                SET url = $1
+                WHERE fragment_id = $2`,
+                [
+                    `http://localhost:3000/api/fragments/${fragmentId}`,
+                    fragmentId
+                ]
+            )
 
             // 4. Identify motifs in current fragment
             await identifyMotifs(pool, fragment, fragmentId);
