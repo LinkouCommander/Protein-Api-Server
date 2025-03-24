@@ -16,46 +16,6 @@ const propensities = {
     Y: { H: 0.69, E: 1.47, C: 0.87 }, V: { H: 1.06, E: 1.70, C: 0.41 }
 }
 
-function ensureDataFileExists() {
-    const dataDir = path.join(__dirname, 'data');
-    if (!fs.existsSync(dataDir)) {
-        fs.mkdirSync(dataDir, { recursive: true });
-    }
-    if (!fs.existsSync(DATA_FILE)) {
-        fs.writeFileSync(DATA_FILE, JSON.stringify({ proteins: [] }, null, 2));
-    }
-}
-
-function readProteinsList() {
-    // Implementation to load proteins.json
-    if(!fs.existsSync(DATA_FILE)) return { proteins: [] };
-    return JSON.parse(fs.readFileSync(DATA_FILE));
-}
-
-function updateProteinList(proteinId, name) {
-    let data = readProteinsList();
-
-    const pro = data.proteins.find(p => p.id === proteinId);
-    if(!pro) {
-        data.proteins.push({ id: proteinId, name });
-    }
-    else {
-        pro.name = name;
-    }
-
-    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
-}
-
-function readProteins(proteinId) {
-    const filePath = path.join(__dirname, 'data', `${proteinId}.json`);
-    if(!fs.existsSync(filePath)) return null;
-    return JSON.parse(fs.readFileSync(filePath));
-}
-
-function writeProteins(filePath, protein) {
-    fs.writeFileSync(filePath, JSON.stringify(protein, null, 2));
-}
-
 function generateProteinName(sequence) {
     const timestep = Math.floor(Date.now()/1000);
     const seq = sequence.slice(0, 8);

@@ -224,9 +224,24 @@ app.get('/api/proteins/:proteinId/download', async (req, res, next) => {
     
         const fragmentData = await pool.query("SELECT * FROM fragments WHERE protein_id = $1;", [proteinId]);
     
-        const updatedFragmentData = await getUpdatedFragmentData(pool, fragmentData);
+        let sequence = fragmentData.rows[0].sequence;
+
+        for(let i = 1; i < fragmentData.rows.length; i++) {
+            sequence += fragmentData.rows[i].sequence.substring(10);
+        }
+
+        const fileName = `protein_${proteinId}.txt`;
+        const filePath = path.join(__dirname, fileName);
+
+        fs.writeFileSync(filePath, sequence, 'utf8');
     
-        res.status(200).json(updatedFragmentData);
+        res.download(filePath, fileName, (err) => {
+            if (err) {
+                next(err);
+            }
+            fs.unlinkSync(filePath);
+        });
+
     } catch (error) {
         next(error);
     }
@@ -237,10 +252,10 @@ app.get('/api/proteins/:proteinId', async (req, res, next) => {
     try {
         const proteinId = req.params.proteinId;
 
-        const fragmentData = await pool.query("SELECT * FROM fragments WHERE protein_id = $1;", [proteinId]);
-        if(protein.rows.length === 0) throw new NotFoundError("Protein with given ID does not exist" );
+        const proteinData = await pool.query("SELECT * FROM proteins WHERE protein_id = $1;", [proteinId]);
+        if(proteinData.rows.length === 0) throw new NotFoundError("Protein with given ID does not exist" );
 
-        res.status(200).json(protein.rows)
+        res.status(200).json(proteinData.rows)
     } catch (error) {
         next(error);
     }
@@ -307,7 +322,7 @@ app.post('/api/proteins', async (req, res, next) => {
         // Proceed with creating new protein
         const proteinData = {
             name: proName,
-            description: "",
+            description,
             molecularWeight: calculateMolecularWeight(sequence),
             sequenceLength: sequence.length,
         };
@@ -318,7 +333,7 @@ app.post('/api/proteins', async (req, res, next) => {
         const proteinOutput = {
             proteinId: protein_id,
             name: proName,
-            description: "",
+            description,
             molecularWeight: calculateMolecularWeight(sequence),
             sequenceLength: sequence.length,
             createdAt: isoCreatedDate,
@@ -360,26 +375,31 @@ app.put('/api/proteins/:proteinId', async (req, res, next) => {
     }
 });
 
-// // delete protein
-// app.delete('/api/proteins/:proteinId', (req, res, next) => {
-//     try {
-//         const proteinId = req.params.proteinId;
-//         let proteins = readProteinsList().proteins;
+// delete protein
+app.delete('/api/proteins/:proteinId', async (req, res, next) => {
+    try {
+        const proteinId = req.params.proteinId;
     
-//         const idx = proteins.findIndex(p => p.id === proteinId);
-//         if (idx === -1) return res.status(404).json({ error: 'Protein with given ID does not exist' });
-    
-//         proteins.splice(idx, 1);
-//         fs.writeFileSync(DATA_FILE, JSON.stringify({ proteins }, null, 2));
-    
-//         const filePath = path.join(__dirname, 'data', `${proteinId}.json`);
-//         fs.unlinkSync(filePath);
-    
-//         res.status(204).send();
-//     } catch (error) {
-//         next(error);
-//     }
-// });
+        // const protein = await pool.query("SELECT * FROM proteins WHERE protein_id = $1;", [proteinId]);
+        // if(protein.rows.length === 0) throw new NotFoundError("Protein with given ID does not exist");
+   
+        const proteinDelete = `
+            DELETE FROM proteins
+            WHERE protein_id = $1;
+        `
+        
+        const result = await pool.query(proteinDelete, [proteinId]);
+
+        if(result.rowCount > 0) {
+            res.status(204).send();
+        }
+        else {
+            throw new NotFoundError("[Delete] Protein with given ID does not exist");
+        }
+    } catch (error) {
+        next(error);
+    }
+});
 
 // // get secondary structure
 // app.get('/api/proteins/:proteinId/structure', async (req, res, next) => {
@@ -428,6 +448,10 @@ app.get('/api/fragments/:fragmentId', async (req, res, next) => {
         next(error);
     }
 })
+
+app.use((req, res, next) => {
+    next(new NotFoundError("The requested route does not exist"));
+});
 
 // Error handling middleware
 function errorHandler(err, req, res, next) {
